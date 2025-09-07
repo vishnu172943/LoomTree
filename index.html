@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>LoomTree: A Chrono-Spatial Index — Whitepaper + Interactive Testbench</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #171b22;
+    --ink: #e6edf3;
+    --muted: #9aa4b2;
+    --accent: #4aa3ff;
+    --accent2: #ff5e57;
+    --accent3: #84e182;
+    --grid: #2a3038;
+  }
+  html, body {
+    margin: 0; padding: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+  }
+  header {
+    padding: 14px 16px; background: var(--panel); border-bottom: 1px solid #222832;
+  }
+  header h1 { margin: 0; font-size: 18px; }
+  header p { margin: 6px 0 0 0; color: var(--muted); }
+  main { display: grid; grid-template-columns: 320px 1fr; gap: 12px; padding: 12px; }
+  .panel {
+    background: var(--panel); border: 1px solid #222832; border-radius: 8px; padding: 12px;
+  }
+  .controls .row { margin-bottom: 10px; }
+  label { display: block; color: var(--muted); margin-bottom: 4px; }
+  input[type="number"], input[type="range"], button, select {
+    width: 100%; box-sizing: border-box; background: #0f131a; border: 1px solid #2b313c; color: var(--ink); padding: 6px 8px; border-radius: 6px;
+  }
+  input[type="range"] { padding: 0; }
+  button { cursor: pointer; transition: 120ms ease background, 120ms ease transform; }
+  button:hover { background: #121823; }
+  button:active { transform: translateY(1px); }
+  .inline {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+  }
+  #canvasWrap { position: relative; }
+  #view {
+    width: 100%; height: 640px; display: block; background: #0a0d12; border: 1px solid #222832; border-radius: 8px;
+  }
+  .badges { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+  .badge {
+    background: #0f131a; border: 1px solid #2b313c; border-radius: 999px; padding: 6px 10px; color: var(--muted);
+  }
+  .metric { color: var(--ink); font-weight: 600; }
+  .legend { display: flex; gap: 12px; margin-top: 10px; color: var(--muted); }
+  .legend .swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 2px; transform: translateY(1px); }
+  .sw1 { background: #94a2b8; }
+  .sw2 { background: var(--accent2); }
+  .sw3 { background: var(--accent3); }
+  .sw4 { background: var(--accent); }
+  .footnote { color: var(--muted); margin-top: 10px; font-size: 12px; }
+  .hr { height: 1px; background: #222832; margin: 12px 0; }
+  details { margin-top: 10px; }
+  details summary { cursor: pointer; color: var(--accent); }
+  code { color: #d6e4ff; background: #0b1016; padding: 1px 4px; border-radius: 4px; }
+  .small { font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>LoomTree: Warp-Weft Chrono-Spatial Index</h1>
+  <p>Efficient O(log n + k) expected time for pure spatial and pure temporal queries, with a live demo.</p>
+</header>
+
+<main>
+  <section class="panel controls">
+    <h3>Data & Parameters</h3>
+    <div class="row">
+      <label for="count">Number of random events</label>
+      <input type="number" id="count" value="25000" min="100" max="300000" step="100">
+    </div>
+    <div class="row">
+      <label for="timeMax">Max timestamp (uniform in [0, max])</label>
+      <input type="number" id="timeMax" value="1000000" min="1000" step="1000">
+    </div>
+    <div class="inline">
+      <div class="row">
+        <label for="qtCap">Quadtree leaf capacity B</label>
+        <input type="number" id="qtCap" value="32" min="4" max="256" step="4">
+      </div>
+      <div class="row">
+        <label for="seed">Random seed (optional)</label>
+        <input type="number" id="seed" placeholder="e.g., 42">
+      </div>
+    </div>
+    <div class="row inline">
+      <button id="populate">Populate</button>
+      <button id="clear">Clear</button>
+    </div>
+
+    <div class="hr"></div>
+
+    <h3>Temporal Query</h3>
+    <div class="row">
+      <label>Time range [start, end]</label>
+      <div class="inline">
+        <input type="range" id="tStart" min="0" max="1000000" value="250000" step="1">
+        <input type="range" id="tEnd"   min="0" max="1000000" value="750000" step="1">
+      </div>
+      <div class="small">Adjust sliders to query temporally. Start ≤ End is enforced automatically.</div>
+    </div>
+
+    <div class="hr"></div>
+
+    <h3>Spatial Query</h3>
+    <div class="row">
+      <div class="small">Drag on the canvas to draw a rectangle; release to run a spatial query.</div>
+    </div>
+
+    <div class="hr"></div>
+
+    <h3>Results</h3>
+    <div class="badges">
+      <div class="badge">Spatial: <span class="metric" id="spatialCount">0</span> in <span class="metric" id="spatialMs">0.0</span> ms</div>
+      <div class="badge">Temporal: <span class="metric" id="temporalCount">0</span> in <span class="metric" id="temporalMs">0.0</span> ms</div>
+      <div class="badge">Total events: <span class="metric" id="totalEvents">0</span></div>
+    </div>
+
+    <div class="legend">
+      <div><span class="swatch sw1"></span> All events</div>
+      <div><span class="swatch sw2"></span> Spatial query hits</div>
+      <div><span class="swatch sw3"></span> Temporal query hits</div>
+      <div><span class="swatch sw4"></span> Both (overlap)</div>
+    </div>
+
+    <details>
+      <summary>What is shown?</summary>
+      <div class="footnote">
+        - The canvas is the 2D space; you can see quadtree cell boundaries (the spatial spine).<br>
+        - Events are plotted as points. Spatial hits highlight in red, temporal hits in green, overlap in blue.<br>
+        - Timings report the elapsed time for query execution, excluding canvas redraw overhead where possible.
+      </div>
+    </details>
+  </section>
+
+  <section class="panel" id="canvasWrap">
+    <canvas id="view" width="1024" height="640"></canvas>
+  </section>
+</main>
+
+<script>
+/* ========= Utilities ========= */
+function seededRandom(seed) {
+  // Mulberry32 PRNG
+  let t = seed >>> 0;
+  return function() {
+    t += 0x6D2B79F5;
+    let r = Math.imul(t ^ t >>> 15, 1 | t);
+    r ^= r + Math.imul(r ^ r >>> 7, 61 | r);
+    return ((r ^ r >>> 14) >>> 0) / 4294967296;
+  };
+}
+function now() { return performance.now(); }
+function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+
+/* ========= Geometry helpers ========= */
+class Rect {
+  constructor(x, y, w, h) {
+    this.x = w >= 0 ? x : x + w;
+    this.y = h >= 0 ? y : y + h;
+    this.w = Math.abs(w);
+    this.h = Math.abs(h);
+  }
+  containsPoint(p) {
+    return p.x >= this.x && p.x <= this.x + this.w && p.y >= this.y && p.y <= this.y + this.h;
+  }
+  intersectsRect(r) {
+    return !(r.x > this.x + this.w || r.x + r.w < this.x || r.y > this.y + this.h || r.y + r.h < this.y);
+  }
+}
+
+/* ========= Event ========= */
+class EventPoint {
+  constructor(x, y, t, data=null) {
+    this.x = x;
+    this.y = y;
+    this.t = t;
+    this.data = data;
+    this.timeNode = null; // backpointer to temporal treap node (optional)
+  }
+}
+
+/* ========= Quadtree (Spatial spine) ========= */
+class QuadtreeNode {
+  constructor(x, y, w, h, capacity=32, depth=0) {
+    this.x = x; this.y = y; this.w = w; this.h = h;
+    this.capacity = capacity;
+    this.depth = depth;
+    this.points = []; // events at leaf
+    this.children = null; // [nw, ne, sw, se] or null
+  }
+  _contains(e) {
+    return (e.x >= this.x && e.x < this.x + this.w && e.y >= this.y && e.y < this.y + this.h);
+  }
+  _subdivide() {
+    const hw = this.w / 2, hh = this.h / 2;
+    const x = this.x, y = this.y;
+    const d = this.depth + 1;
+    this.children = [
+      new QuadtreeNode(x,         y,         hw, hh, this.capacity, d), // NW (top-left)
+      new QuadtreeNode(x + hw,    y,         hw, hh, this.capacity, d), // NE (top-right)
+      new QuadtreeNode(x,         y + hh,    hw, hh, this.capacity, d), // SW (bottom-left)
+      new QuadtreeNode(x + hw,    y + hh,    hw, hh, this.capacity, d), // SE (bottom-right)
+    ];
+    // Reinsert points
+    const old = this.points;
+    this.points = [];
+    for (const p of old) this._insertIntoChildren(p);
+  }
+  _insertIntoChildren(e) {
+    for (const c of this.children) {
+      if (c._contains(e)) {
+        c.insert(e);
+        return true;
+      }
+    }
+    return false; // Shouldn't happen if bounds are consistent
+  }
+  insert(e) {
+    if (!this._contains(e)) return false;
+    if (!this.children) {
+      this.points.push(e);
+      if (this.points.length > this.capacity && this.w >= 2 && this.h >= 2) {
+        this._subdivide();
+      }
+      return true;
+    } else {
+      return this._insertIntoChildren(e);
+    }
+  }
+  queryRange(rect, out) {
+    // Early rejection
+    const selfRect = new Rect(this.x, this.y, this.w, this.h);
+    if (!selfRect.intersectsRect(rect)) return;
+    if (!this.children) {
+      for (const p of this.points) if (rect.containsPoint(p)) out.push(p);
+    } else {
+      for (const c of this.children) c.queryRange(rect, out);
+    }
+  }
+  draw(ctx) {
+    ctx.strokeStyle = "#2a3038";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(this.x + 0.5, this.y + 0.5, this.w, this.h);
+    if (this.children) for (const c of this.children) c.draw(ctx);
+  }
+}
+
+/* ========= Treap (Temporal spine) ========= */
+class TreapNode {
+  constructor(key, event) {
+    this.key = key; // timestamp
+    this.priority = Math.random(); // heap key
+    this.left = null;
+    this.right = null;
+    this.event = event;
+  }
+}
+class TemporalTreap {
+  constructor() {
+    this.root = null;
+    this.size = 0;
+    this.tie = 0; // tie-breaker, if needed
+  }
+  rotateRight(y) {
+    const x = y.left;
+    y.left = x.right;
+    x.right = y;
+    return x;
+  }
+  rotateLeft(x) {
+    const y = x.right;
+    x.right = y.left;
+    y.left = x;
+    return y;
+  }
+  _insert(root, node) {
+    if (!root) return node;
+    if (node.key < root.key || (node.key === root.key && node.event !== root.event)) {
+      root.left = this._insert(root.left, node);
+      if (root.left.priority < root.priority) root = this.rotateRight(root);
+    } else {
+      root.right = this._insert(root.right, node);
+      if (root.right.priority < root.priority) root = this.rotateLeft(root);
+    }
+    return root;
+  }
+  insert(event) {
+    const node = new TreapNode(event.t, event);
+    this.root = this._insert(this.root, node);
+    this.size++;
+    event.timeNode = node; // backpointer (not used elsewhere in this demo)
+    return node;
+  }
+  // Range query: collect events with t in [t0, t1]
+  _range(root, t0, t1, out) {
+    if (!root) return;
+    if (root.key < t0) {
+      this._range(root.right, t0, t1, out);
+    } else if (root.key > t1) {
+      this._range(root.left, t0, t1, out);
+    } else {
+      this._range(root.left, t0, t1, out);
+      out.push(root.event);
+      this._range(root.right, t0, t1, out);
+    }
+  }
+  range(t0, t1, out) {
+    this._range(this.root, t0, t1, out);
+  }
+}
+
+/* ========= LoomTree (Unified CSI) ========= */
+class LoomTree {
+  constructor(x, y, w, h, quadCapacity=32) {
+    this.bounds = { x, y, w, h };
+    this.rootQuad = new QuadtreeNode(x, y, w, h, quadCapacity, 0);
+    this.timeTreap = new TemporalTreap();
+    this.n = 0;
+  }
+  insert(event) {
+    const ok = this.rootQuad.insert(event);
+    if (!ok) return false;
+    this.timeTreap.insert(event);
+    this.n++;
+    return true;
+  }
+  querySpatial(rect) {
+    const out = [];
+    this.rootQuad.queryRange(rect, out);
+    return out;
+  }
+  queryTemporal(t0, t1) {
+    const out = [];
+    if (t1 < t0) [t0, t1] = [t1, t0];
+    this.timeTreap.range(t0, t1, out);
+    return out;
+  }
+  draw(ctx) {
+    this.rootQuad.draw(ctx);
+  }
+}
+
+/* ========= Testbench / UI ========= */
+const canvas = document.getElementById('view');
+const ctx = canvas.getContext('2d');
+const populateBtn = document.getElementById('populate');
+const clearBtn = document.getElementById('clear');
+const countInput = document.getElementById('count');
+const timeMaxInput = document.getElementById('timeMax');
+const qtCapInput = document.getElementById('qtCap');
+const seedInput = document.getElementById('seed');
+
+const tStartRange = document.getElementById('tStart');
+const tEndRange   = document.getElementById('tEnd');
+
+const spatialCountEl = document.getElementById('spatialCount');
+const spatialMsEl = document.getElementById('spatialMs');
+const temporalCountEl = document.getElementById('temporalCount');
+const temporalMsEl = document.getElementById('temporalMs');
+const totalEventsEl = document.getElementById('totalEvents');
+
+// State
+let loom = null;
+let allEvents = [];
+let rng = Math.random;
+let timeMax = +timeMaxInput.value;
+
+// For drawing & interaction
+let spatialRect = null; // active selection rectangle
+let dragging = false;
+let dragStart = null;
+
+// Query results
+let spatialHits = new Set();
+let temporalHits = new Set();
+
+// Initialize LoomTree
+function resetIndex() {
+  const B = +qtCapInput.value || 32;
+  loom = new LoomTree(0, 0, canvas.width, canvas.height, B);
+  allEvents = [];
+  spatialHits.clear();
+  temporalHits.clear();
+  spatialRect = null;
+  updateMetrics();
+  drawScene();
+}
+
+function updateMetrics(sCount=spatialHits.size, sMs=0.0, tCount=temporalHits.size, tMs=0.0) {
+  spatialCountEl.textContent = sCount.toString();
+  spatialMsEl.textContent = sMs.toFixed(1);
+  temporalCountEl.textContent = tCount.toString();
+  temporalMsEl.textContent = tMs.toFixed(1);
+  totalEventsEl.textContent = loom ? loom.n.toString() : "0";
+}
+
+function drawScene() {
+  // clear
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // background grid-ish
+  ctx.fillStyle = "#0a0d12";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // draw quadtree structure
+  if (loom) loom.draw(ctx);
+
+  // draw events
+  // We draw in 3 passes for coloring overlap distinctly:
+  // 1) all points (dim)
+  // 2) spatial-only hits (red)
+  // 3) temporal-only hits (green)
+  // 4) both (blue)
+  // Note: for performance with many points, a single-pass dynamic color could be used; this is still fine for tens of thousands.
+  const isSpatial = spatialHits;
+  const isTemporal = temporalHits;
+
+  // pass 1: non-hits
+  ctx.fillStyle = "#94a2b8";
+  for (const p of allEvents) {
+    const s = isSpatial.has(p), t = isTemporal.has(p);
+    if (!s && !t) {
+      ctx.fillRect(p.x, p.y, 2, 2);
+    }
+  }
+  // pass 2: spatial-only
+  ctx.fillStyle = "#ff5e57";
+  for (const p of isSpatial) {
+    if (!isTemporal.has(p)) ctx.fillRect(p.x, p.y, 2, 2);
+  }
+  // pass 3: temporal-only
+  ctx.fillStyle = "#84e182";
+  for (const p of isTemporal) {
+    if (!isSpatial.has(p)) ctx.fillRect(p.x, p.y, 2, 2);
+  }
+  // pass 4: both
+  ctx.fillStyle = "#4aa3ff";
+  for (const p of isSpatial) {
+    if (isTemporal.has(p)) ctx.fillRect(p.x, p.y, 2, 2);
+  }
+
+  // draw spatial selection rectangle
+  if (spatialRect) {
+    ctx.strokeStyle = "#ff5e57";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 4]);
+    ctx.strokeRect(spatialRect.x + 0.5, spatialRect.y + 0.5, spatialRect.w, spatialRect.h);
+    ctx.setLineDash([]);
+  }
+}
+
+function populate() {
+  const N = +countInput.value || 25000;
+  timeMax = +timeMaxInput.value || 1000000;
+  const B = +qtCapInput.value || 32;
+  const seed = seedInput.value !== "" ? +seedInput.value : null;
+  rng = seed !== null && !Number.isNaN(seed) ? seededRandom(seed) : Math.random;
+
+  resetIndex();
+
+  // Prepare slider bounds
+  tStartRange.min = "0";
+  tStartRange.max = String(timeMax);
+  tEndRange.min = "0";
+  tEndRange.max = String(timeMax);
+  tStartRange.value = String(Math.floor(timeMax * 0.25));
+  tEndRange.value = String(Math.floor(timeMax * 0.75));
+
+  const t0 = now();
+  for (let i = 0; i < N; i++) {
+    const x = Math.floor(rng() * canvas.width);
+    const y = Math.floor(rng() * canvas.height);
+    const t = Math.floor(rng() * timeMax);
+    const e = new EventPoint(x, y, t, null);
+    loom.insert(e);
+    allEvents.push(e);
+  }
+  const t1 = now();
+  updateMetrics();
+  drawScene();
+  // trigger initial temporal query to show responsiveness
+  doTemporalQuery();
+}
+
+function clearAll() {
+  resetIndex();
+  drawScene();
+}
+
+function doSpatialQuery(rect) {
+  if (!loom || !rect) return;
+  const t0 = now();
+  const res = loom.querySpatial(rect);
+  const dt = now() - t0;
+
+  spatialHits = new Set(res);
+  updateMetrics(spatialHits.size, dt, temporalHits.size, +temporalMsEl.textContent || 0);
+  drawScene();
+}
+
+function doTemporalQuery() {
+  if (!loom) return;
+  let t0val = +tStartRange.value;
+  let t1val = +tEndRange.value;
+  if (t0val > t1val) {
+    // enforce start <= end
+    const tmp = t0val;
+    t0val = t1val;
+    t1val = tmp;
+    tStartRange.value = String(t0val);
+    tEndRange.value = String(t1val);
+  }
+  const t0 = now();
+  const res = loom.queryTemporal(t0val, t1val);
+  const dt = now() - t0;
+
+  temporalHits = new Set(res);
+  updateMetrics(spatialHits.size, +spatialMsEl.textContent || 0, temporalHits.size, dt);
+  drawScene();
+}
+
+/* ========= Canvas interaction: spatial selection ========= */
+canvas.addEventListener('mousedown', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  dragging = true;
+  dragStart = { x, y };
+  spatialRect = new Rect(x, y, 0, 0);
+  drawScene();
+});
+canvas.addEventListener('mousemove', (e) => {
+  if (!dragging) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  const w = x - dragStart.x;
+  const h = y - dragStart.y;
+  spatialRect = new Rect(dragStart.x, dragStart.y, w, h);
+  drawScene();
+});
+canvas.addEventListener('mouseup', () => {
+  if (!dragging) return;
+  dragging = false;
+  if (spatialRect && spatialRect.w >= 1 && spatialRect.h >= 1) {
+    doSpatialQuery(spatialRect);
+  } else {
+    spatialRect = null;
+    spatialHits.clear();
+    updateMetrics();
+    drawScene();
+  }
+});
+canvas.addEventListener('mouseleave', () => {
+  if (dragging) {
+    dragging = false;
+    if (spatialRect && spatialRect.w >= 1 && spatialRect.h >= 1) {
+      doSpatialQuery(spatialRect);
+    } else {
+      spatialRect = null;
+      spatialHits.clear();
+      updateMetrics();
+      drawScene();
+    }
+  }
+});
+
+/* ========= Wiring ========= */
+populateBtn.addEventListener('click', populate);
+clearBtn.addEventListener('click', clearAll);
+tStartRange.addEventListener('input', doTemporalQuery);
+tEndRange.addEventListener('input', doTemporalQuery);
+
+// Boot
+resetIndex();
+</script>
+</body>
+</html>
